@@ -1,0 +1,19 @@
+{
+  "name": "onlyfrens-contracts",
+  "version": "1.0.0",
+  "description": "The OnlyFrens smart contracts",
+  "scripts": {
+    "build": "forge build",
+    "dev": "forge test -w -vv",
+    "test": "forge test -vvvv",
+    "coverage": "forge coverage --report lcov && genhtml lcov.info -o html",
+    "deploy": "source .env && forge script script/Deploy.s.sol:DeployScript --rpc-url $RPC_URL --broadcast --verify -vvvv"
+  },
+  "keywords": [],
+  "author": "Superfluid",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/superfluid-finance/onlyfrens/issues"
+  },
+  "homepage": "https://github.com/superfluid-finance/onlyfrens/packages/contracts#readme"
+}
