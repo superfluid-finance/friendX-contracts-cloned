@@ -1,0 +1,32 @@
+# Turbo Specific Files
+.turbo
+
+# Dotenv file
+.env
+
+# JavaScript Ecosystem Specific Files
+node_modules
+
+# Foundry Specific Files
+
+## Compiler files
+cache/
+out/
+
+## Ignores development broadcast logs
+!/broadcast
+
+## Docs
+docs/
+
+.DS_Store
+
+.idea/
+
+# Subgraph Specific Folders/Files
+
+packages/subgraph/build
+packages/subgraph/generated
+
+dist
+.tsup
