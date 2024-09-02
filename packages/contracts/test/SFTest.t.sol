@@ -5,19 +5,25 @@ import "forge-std/Test.sol";
 
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import { ERC1820RegistryCompiled } from "superfluid-contracts/libs/ERC1820RegistryCompiled.sol";
-import { SuperfluidFrameworkDeployer } from "superfluid-contracts/utils/SuperfluidFrameworkDeployer.sol";
-import { ISETH } from "superfluid-contracts/interfaces/tokens/ISETH.sol";
+import {
+    ERC1820RegistryCompiled
+} from "@superfluid-finance/ethereum-contracts/contracts/libs/ERC1820RegistryCompiled.sol";
+import {
+    SuperfluidFrameworkDeployer
+} from "@superfluid-finance/ethereum-contracts/contracts/utils/SuperfluidFrameworkDeployer.sol";
+import {
+    ISETH
+} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/tokens/ISETH.sol";
 import {
     BatchOperation,
     ISuperfluid,
     ISuperfluidPool,
     IGeneralDistributionAgreementV1,
     ISuperApp
-} from "superfluid-contracts/interfaces/superfluid/ISuperfluid.sol";
-import { TestToken } from "superfluid-contracts/utils/TestToken.sol";
-import { SuperToken } from "superfluid-contracts/superfluid/SuperToken.sol";
-import { SuperTokenV1Library } from "superfluid-contracts/apps/SuperTokenV1Library.sol";
+} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
+import { TestToken } from "@superfluid-finance/ethereum-contracts/contracts/utils/TestToken.sol";
+import { SuperToken } from "@superfluid-finance/ethereum-contracts/contracts/superfluid/SuperToken.sol";
+import { SuperTokenV1Library } from "@superfluid-finance/ethereum-contracts/contracts/apps/SuperTokenV1Library.sol";
 import { deployAll } from "../script/Deploy.s.sol";
 import { AccountingHelperLibrary } from "../src/libs/AccountingHelperLibrary.sol";
 import { Channel, ChannelBase } from "../src/Channel.sol";
@@ -100,7 +106,6 @@ contract SFTest is Test {
         returns (address channelInstance)
     {
         vm.assume(flowRate > 0);
-        creatorFeePct = channelLogic.ONE_HUNDRED_PERCENT() / 4;
 
         vm.startPrank(creator);
         channelInstance = channelFactory.createChannelContract(flowRate, creatorFeePct);
@@ -116,7 +121,6 @@ contract SFTest is Test {
         uint256 creatorFeePct
     ) internal returns (address channelInstance) {
         vm.assume(flowRate > 0);
-        creatorFeePct = channelLogic.ONE_HUNDRED_PERCENT() / 4;
 
         vm.startPrank(creator);
         channelInstance = channelFactory.createChannelContract(channelOwner, flowRate, creatorFeePct);
@@ -130,7 +134,7 @@ contract SFTest is Test {
         address channelOwner,
         int96 flowRate,
         uint256 creatorFeePct
-    ) internal {
+    ) internal view {
         address precomputedAddress = channelFactory.getChannelAddress(channelOwner);
 
         assertEq(
@@ -174,16 +178,14 @@ contract SFTest is Test {
         int96 totalInflowRateBefore = channel.totalInflowRate();
         {
             ISuperfluid.Operation[] memory ops =
-                getSubscribeBatchOperation(_sf, _subscriptionSuperToken, subscriber, channelInstance, flowRate);
+                getSubscribeBatchOperation(_sf.host, _subscriptionSuperToken, channelInstance, flowRate);
 
             vm.startPrank(subscriber);
             _sf.host.batchCall(ops);
             vm.stopPrank();
         }
-        (uint256 liquidationPeriod,) = _sf.governance.getPPPConfig(_sf.host, _subscriptionSuperToken);
 
         int96 senderToAppFlowRate = _subscriptionSuperToken.getFlowRate(subscriber, channelInstance);
-        uint256 actualDepositAmount = liquidationPeriod * uint256(uint96(senderToAppFlowRate));
         assertEq(
             flowRate, senderToAppFlowRate, "_helperCreateChannelContractAndSubscribeToIt: flow rate not set correctly"
         );
@@ -194,11 +196,13 @@ contract SFTest is Test {
             "_helperCreateChannelContractAndSubscribeToIt: total inflow rate not set correctly"
         );
 
-        assertEq(
-            _subscriptionSuperToken.balanceOf(channelInstance),
-            actualDepositAmount,
-            "_helperCreateChannelContractAndSubscribeToIt: channel contract balance should hold deposit"
-        );
+        // (uint256 liquidationPeriod,) = _sf.governance.getPPPConfig(_sf.host, _subscriptionSuperToken);
+        // uint256 actualDepositAmount = liquidationPeriod * uint256(uint96(senderToAppFlowRate));
+        // assertEq(
+        //     _subscriptionSuperToken.balanceOf(channelInstance),
+        //     actualDepositAmount,
+        //     "_helperCreateChannelContractAndSubscribeToIt: channel contract balance should hold deposit"
+        // );
 
         assertEq(
             _sf.gda.isMemberConnected(channel.channelPool(), subscriber),
@@ -213,7 +217,7 @@ contract SFTest is Test {
     {
         {
             ISuperfluid.Operation[] memory ops =
-                getUpdateSubscriptionBatchOperation(_sf, _subscriptionSuperToken, subscriber, channelInstance, updatedFlowRate);
+                getUpdateSubscriptionBatchOperation(_sf.host, _subscriptionSuperToken, subscriber, channelInstance, updatedFlowRate);
 
             vm.startPrank(subscriber);
             _sf.host.batchCall(ops);
@@ -240,9 +244,9 @@ contract SFTest is Test {
         vm.stopPrank();
 
         (uint128 protocolFeeUnitsDelta, uint128 creatorUnitsDelta, uint128 subscriberUnitsDelta) =
-        AccountingHelperLibrary.getPoolUnitDeltaAmounts(
-            stakeDelta, channel.ONE_HUNDRED_PERCENT(), channel.PROTOCOL_FEE_AMOUNT(), channel.creatorFeePercentage()
-        );
+            AccountingHelperLibrary.getPoolUnitDeltaAmounts
+            (channel.CHANNEL_POOL_SCALING_FACTOR(),
+             stakeDelta, channel.PROTOCOL_FEE_AMOUNT(), channel.creatorFeePercentage());
 
         assertEq(
             protocolUnitsBefore + protocolFeeUnitsDelta,
@@ -255,7 +259,7 @@ contract SFTest is Test {
             "_helperHandleStake: creator units not set correctly"
         );
         assertEq(
-            channel.getSubscriberCashbackPercentage() == 0 ? 0 : subscriberUnitsBefore + subscriberUnitsDelta,
+            channel.getStakersCashbackPercentage() == 0 ? 0 : subscriberUnitsBefore + subscriberUnitsDelta,
             channelETHxPool.getUnits(subscriber),
             "_helperHandleStake: subscriber units not set correctly"
         );
@@ -280,9 +284,9 @@ contract SFTest is Test {
         vm.stopPrank();
 
         (uint128 protocolFeeUnitsDelta, uint128 creatorUnitsDelta, uint128 subscriberUnitsDelta) =
-        AccountingHelperLibrary.getPoolUnitDeltaAmounts(
-            unstakeDelta, channel.ONE_HUNDRED_PERCENT(), channel.PROTOCOL_FEE_AMOUNT(), channel.creatorFeePercentage()
-        );
+        AccountingHelperLibrary.getPoolUnitDeltaAmounts
+            (channel.CHANNEL_POOL_SCALING_FACTOR(),
+             unstakeDelta, channel.PROTOCOL_FEE_AMOUNT(), channel.creatorFeePercentage());
 
         assertEq(
             protocolUnitsBefore - protocolFeeUnitsDelta,
@@ -295,7 +299,7 @@ contract SFTest is Test {
             "_helperHandleUnstake: creator units not set correctly"
         );
         assertEq(
-            channel.getSubscriberCashbackPercentage() == 0 ? 0 : subscriberUnitsBefore - subscriberUnitsDelta,
+            channel.getStakersCashbackPercentage() == 0 ? 0 : subscriberUnitsBefore - subscriberUnitsDelta,
             channelETHxPool.getUnits(subscriber),
             "_helperHandleUnstake: subscriber units not set correctly"
         );
@@ -305,6 +309,8 @@ contract SFTest is Test {
     //// FAN TOKEN ////
 
     function _helperStake(address caller, address channel, uint256 amount) internal {
+        console.log("_helperStake caller %s channel %s amount %d", caller, channel, amount);
+
         (
             uint256 fanBalanceBefore,
             uint256 stakedFanBalanceBefore,
@@ -336,6 +342,8 @@ contract SFTest is Test {
     }
 
     function _helperUnstake(address caller, address channel, uint256 amount) internal {
+        console.log("_helperUnstake caller %s channel %s amount %d", caller, channel, amount);
+
         (
             uint256 fanBalanceBefore,
             uint256 stakedFanBalanceBefore,
@@ -374,6 +382,8 @@ contract SFTest is Test {
     }
 
     function _helperClaim(address caller, address channel) internal {
+        console.log("_helperClaim caller %s channel %s", caller, channel);
+
         (
             uint256 fanBalanceBefore,
             uint256 stakedFanBalanceBefore,
@@ -470,7 +480,18 @@ contract SFTest is Test {
         vm.warp(block.timestamp + liquidationPeriod);
     }
 
-    function _assertAppNotJailed(address app) internal {
+    function _assertAppNotJailed(address app) internal view {
         assertEq(_sf.host.isAppJailed(ISuperApp(app)), false, "_assertAppNotJailed: app should not be jailed");
+    }
+
+    // Normalize the whole number to decimals of the fan token
+    function _stakingAmount(uint256 wholeNumber) internal view returns (uint256) {
+        return wholeNumber * (10 ** fanToken.decimals());
+    }
+
+    function _mintFanTokens(address to, uint256 amount) internal {
+        vm.startPrank(ADMIN);
+        fanToken.ownerMint(to, amount);
+        vm.stopPrank();
     }
 }

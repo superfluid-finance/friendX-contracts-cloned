@@ -8,7 +8,7 @@ import {
     ISuperfluidPool,
     IGeneralDistributionAgreementV1,
     ISuperApp
-} from "superfluid-contracts/interfaces/superfluid/ISuperfluid.sol";
+} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
 import { SuperTokenV1Library } from "@superfluid-finance/ethereum-contracts/contracts/apps/SuperTokenV1Library.sol";
 import { AccountingHelperLibrary } from "../libs/AccountingHelperLibrary.sol";
 import {
@@ -44,7 +44,7 @@ contract FriendXTester is SuperfluidTester {
 
     function subscribeChannel(Channel channel, int96 subscriptionFlowRate) external returns (bool) {
         ISuperfluid.Operation[] memory ops = getSubscribeBatchOperation(
-            sf, channel.SUBSCRIPTION_SUPER_TOKEN(), address(this), address(channel), subscriptionFlowRate
+            sf.host, channel.SUBSCRIPTION_SUPER_TOKEN(), address(channel), subscriptionFlowRate
         );
         sf.host.batchCall(ops); // Bad host: not returning bool...
         subscribed[channel] = true;
@@ -53,7 +53,7 @@ contract FriendXTester is SuperfluidTester {
 
     function updateSubscription(Channel channel, int96 updatedSubscriptionFlowRate) external returns (bool) {
         ISuperfluid.Operation[] memory ops = getUpdateSubscriptionBatchOperation(
-            sf, channel.SUBSCRIPTION_SUPER_TOKEN(), address(this), address(channel), updatedSubscriptionFlowRate
+            sf.host, channel.SUBSCRIPTION_SUPER_TOKEN(), address(this), address(channel), updatedSubscriptionFlowRate
         );
         sf.host.batchCall(ops);
         return true;
@@ -220,7 +220,7 @@ contract FullHotFuzz is HotFuzzBase {
         }
     }
 
-    function claimAllTokens(uint8 a, uint8 b) external {
+    function claimAllTokens(uint8 a) external {
         FriendXTester tester = FriendXTester(address(_getOneTester(a)));
         address[] memory channels = _channelListToAddressList(_channelList);
 
@@ -238,8 +238,8 @@ contract FullHotFuzz is HotFuzzBase {
         bool unstakeCooldownOver = _isUnstakeCooldownOver(_fanToken, address(tester));
 
         (,, uint128 subscriberUnitsDelta) = AccountingHelperLibrary.getPoolUnitDeltaAmounts(
-            amount, channel.ONE_HUNDRED_PERCENT(), channel.PROTOCOL_FEE_AMOUNT(), channel.creatorFeePercentage()
-        );
+            channel.CHANNEL_POOL_SCALING_FACTOR(),
+            amount, channel.PROTOCOL_FEE_AMOUNT(), channel.creatorFeePercentage());
 
         if (rewardTokenBalance >= amount && amount > 0 && unstakeCooldownOver && subscriberUnitsDelta > 0) {
             try tester.stakeRewards(_fanToken, address(channel), amount) { }
@@ -283,7 +283,7 @@ contract FullHotFuzz is HotFuzzBase {
         }
     }
 
-    function compoundAllTokens(uint8 a, uint8 b) external {
+    function compoundAllTokens(uint8 a) external {
         FriendXTester tester = FriendXTester(address(_getOneTester(a)));
         address[] memory channels = _channelListToAddressList(_channelList);
 

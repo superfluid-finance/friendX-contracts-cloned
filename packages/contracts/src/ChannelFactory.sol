@@ -8,12 +8,16 @@ import {
     ISuperfluid,
     ISuperToken,
     SuperAppDefinitions
-} from "superfluid-contracts/interfaces/superfluid/ISuperfluid.sol";
+} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
+
 import { Channel } from "./Channel.sol";
 import { IChannelFactory } from "./interfaces/IChannelFactory.sol";
+import { ONE_HUNDRED_PERCENT } from "./libs/AccountingHelperLibrary.sol";
 import { ChannelBase } from "./interfaces/ChannelBase.sol";
 
-// TODO Make ChannelFactory an upgradeable proxy contract itself
+
+/// @dev In all mystery, we allow you configure it, but we don't allow any other value.
+uint256 constant MANDATORY_CREATOR_FEE_PCT = ONE_HUNDRED_PERCENT / 4;
 
 /// @title Channel Factory Contract
 /// @author Superfluid
@@ -56,11 +60,10 @@ contract ChannelFactory is IChannelFactory {
     {
         if (subscriptionFlowRate < 0) revert FLOW_RATE_NEGATIVE();
 
-        ChannelBase channel = ChannelBase(getBeaconImplementation());
         // @note Creator fee is 25%
         // @note Protocol fee is 5%
         // @note Cashback is 70%
-        if (creatorFeePct != channel.ONE_HUNDRED_PERCENT() / 4) {
+        if (creatorFeePct != MANDATORY_CREATOR_FEE_PCT) {
             revert INVALID_CREATOR_FEE_PCT();
         }
 

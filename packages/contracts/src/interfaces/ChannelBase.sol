@@ -4,10 +4,15 @@ pragma solidity >=0.8.4;
 import { Initializable } from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import { SuperAppBase } from "superfluid-contracts/apps/SuperAppBase.sol";
-import { ISuperfluid, ISuperfluidPool, ISuperToken } from "superfluid-contracts/interfaces/superfluid/ISuperfluid.sol";
+import {
+    SuperAppBase
+} from "@superfluid-finance/ethereum-contracts/contracts/apps/SuperAppBase.sol";
+import {
+    ISuperfluid, ISuperfluidPool, ISuperToken
+} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
 
 import { IFanToken } from "./IFanToken.sol";
+
 
 abstract contract ChannelBase is Initializable, SuperAppBase {
     ///// EVENTS /////
@@ -24,29 +29,19 @@ abstract contract ChannelBase is Initializable, SuperAppBase {
     error NOT_ENOUGH_DEPOSIT();             // 0x5d997d88
     error INVALID_SUBSCRIPTION_FLOW_RATE(); // 0x8e10416e
     error ONLY_FAN_CAN_BE_CALLER();         // 0xe7f5e924
+    error ONLY_GOV_ALLOWED();               // 0x151711fb
     error NO_UNITS_FOR_SUBSCRIBER();        // 0xfadc3ed0
 
     ///// CONSTANT VARIABLES /////
-    bytes32 public constant CFAV1_TYPE = keccak256("org.superfluid-finance.agreements.ConstantFlowAgreement.v1");
-    /// @notice Returns the protocol fee (constant)
-    /// @dev 5% = 500
-    /// @return uint256 The protocol fee amount
-    uint256 public constant PROTOCOL_FEE_AMOUNT = 500; // 5%
 
-    /// @notice Returns the value representing one hundred percent in the system (constant)
-    /// @dev 100% = 10000
-    /// @return uint256
-    uint256 public constant ONE_HUNDRED_PERCENT = 10_000; // 100%
+    /// @notice Latest regime revision for the new channels.
+    /// @dev For channels from previous regime, migration will be needed.
+    uint8 public constant LATEST_REGIME_REVISION = 1;
 
     ///// IMMUTABLE VARIABLES /////
     /// @notice Returns the ISuperfluid interface
     /// @return ISuperfluid The Superfluid host interface
     ISuperfluid public immutable HOST;
-
-    /// @notice Returns the address where protocol fees are sent
-    /// @dev This is the address of the Superfluid Protocol
-    /// @return address The address of the protocol fee destination
-    address public immutable PROTOCOL_FEE_DESTINATION;
 
     /// @notice Returns the ISuperToken interface
     /// @return ISuperToken The SuperToken interface
@@ -55,6 +50,28 @@ abstract contract ChannelBase is Initializable, SuperAppBase {
     /// @notice Returns the IERC20 interface
     /// @return IERC20 The FAN token interface
     IFanToken public immutable FAN;
+
+    /// @notice Returns the address where protocol fees are sent
+    /// @dev This is the address of the Superfluid Protocol
+    /// @return address The address of the protocol fee destination
+    address public immutable PROTOCOL_FEE_DESTINATION;
+
+    /// @notice Returns the protocol fee (constant)
+    /// @return uint256 The protocol fee amount
+    uint256 public immutable PROTOCOL_FEE_AMOUNT;
+
+    /// @notice Minimum subscription flow rate.
+    int96 public immutable MINIMUM_SUBSCRIPTION_FLOW_RATE;
+
+    /// @notice Maximum subscription flow rate.
+    int96 public immutable MAXIMUM_SUBSCRIPTION_FLOW_RATE;
+
+    /// @notice Channel pool scaling factor, required by GDA. (revision 0)
+    uint256 public constant CHANNEL_POOL_SCALING_FACTOR_R0 = 1e2;
+    /// @notice Channel pool scaling factor, required by GDA. (revision 1)
+    uint256 public constant CHANNEL_POOL_SCALING_FACTOR_R1 = 1e8;
+    /// @notice Channel pool scaling factor, required by GDA. (latest revision)
+    uint256 public constant CHANNEL_POOL_SCALING_FACTOR = CHANNEL_POOL_SCALING_FACTOR_R1;
 
     ///// STATE VARIABLES /////
     /// @notice Returns the flow rate required for a subscription
@@ -85,12 +102,30 @@ abstract contract ChannelBase is Initializable, SuperAppBase {
     /// @return deposit uint256 The total amount deposited by the user
     mapping(address user => uint256 deposit) public userDeposits;
 
+    /*******************************************************************************************************************
+     * Channel Configuration Regimes
+     ******************************************************************************************************************/
+
+    /// @notice The current regime revision of the channel.
+    /// @dev Due to how EVM works, revision 0 is the default value when the regime system is introduced.
+    uint8 public currentRegimeRevision;
+
+    /// @notice Mapping the regime each staker is subject to.
+    /// @dev Due to how EVM works, when the regime system is introduced, all stakers starts with revision zero.
+    mapping (address staker => uint256 regimeRevision) public stakerRegimeRevisions;
+
     //// FUNCTIONS /////
-    constructor(ISuperfluid host, address protocolFeeDest, ISuperToken subscriptionSuperToken, IFanToken _fan) {
+    constructor(ISuperfluid host,
+                ISuperToken subscriptionSuperToken, IFanToken fan,
+                address protocolFeeDest, uint256 protocolFeeAmount,
+                int96 minSubscriptionFlowRate, int96 maxSubscriptionFlowRate) {
         HOST = host;
         SUBSCRIPTION_SUPER_TOKEN = subscriptionSuperToken;
-        FAN = _fan;
+        FAN = fan;
         PROTOCOL_FEE_DESTINATION = protocolFeeDest;
+        PROTOCOL_FEE_AMOUNT = protocolFeeAmount;
+        MINIMUM_SUBSCRIPTION_FLOW_RATE = minSubscriptionFlowRate;
+        MAXIMUM_SUBSCRIPTION_FLOW_RATE = maxSubscriptionFlowRate;
     }
 
     /// @notice Initializes the contract with given parameters
@@ -154,8 +189,8 @@ abstract contract ChannelBase is Initializable, SuperAppBase {
         virtual
         returns (uint256 lastUpdated, int96 flowRate);
 
-    /// @notice Returns the subscriber cashback percentage
+    /// @notice Returns the stakers' cashback percentage
     /// @dev This is the percentage of the creator subscriptions that subscribers will receive as cashback
     /// @return uint256 The subscriber cashback percentage
-    function getSubscriberCashbackPercentage() public view virtual returns (uint256);
+    function getStakersCashbackPercentage() public view virtual returns (uint256);
 }

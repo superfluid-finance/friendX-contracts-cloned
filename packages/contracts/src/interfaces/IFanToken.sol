@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.4;
 
-import { IERC20Upgradeable } from "@openzeppelin-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 struct SubscriberCreatorChannelData {
     uint256 stakedBalance;
@@ -13,7 +13,7 @@ struct SubscriberData {
     uint256 lastUnstakedTime;
 }
 
-interface IFanToken is IERC20Upgradeable {
+interface IFanToken is IERC20 {
     ///// EVENTS /////
     event FanTokenStaked(address indexed subscriber, address indexed channel, uint256 amount);
     event FanTokenUnstaked(address indexed subscriber, address indexed channel, uint256 amount);
@@ -28,6 +28,9 @@ interface IFanToken is IERC20Upgradeable {
     error FAN_TOKEN_INVALID_REWARDS_PERCENTAGE();       // 0xa31e2b39
     error FAN_TOKEN_ONLY_OWNER();                       // 0x8483e25d
 
+    /// @notice The owner of the contract, aka. government.
+    function owner() external returns (address gov);
+
     ///// WRITE FUNCTIONS /////
     /// @notice Sets the channel factory address
     /// @dev Updates the address of the channel factory used in the contract
@@ -37,8 +40,8 @@ interface IFanToken is IERC20Upgradeable {
     /// @notice Updates the totalSubscriptionFlowRate property when a new subscription is created or cancelled
     /// @dev Only channels created via the ChannelFactory can call this
     function updateTotalSubscriptionFlowRate(int96 flowRateDelta) external;
-    
-    /// @notice Updates the totalSubscriptionFlowRate and lastClaimedTime property when a new subscription is created 
+
+    /// @notice Updates the totalSubscriptionFlowRate and lastClaimedTime property when a new subscription is created
     /// @dev Only channels created via the ChannelFactory can call this
     /// @param subscriber The address of the subscriber
     /// @param flowRateDelta The change in the subscriber's flow rate
@@ -126,8 +129,8 @@ interface IFanToken is IERC20Upgradeable {
         external
         view
         returns (uint256 claimableAmount);
-    
-    /// @notice Estimates the daily max claimable amount for a 
+
+    /// @notice Estimates the daily max claimable amount for a
     /// @dev Even if a user doesn't claim for 24 hours and 1 second, they can only claim 24 hours worth of rewards
     /// @param subscriber The address of the subscriber
     /// @param channel The address of the channel
@@ -170,4 +173,28 @@ interface IFanToken is IERC20Upgradeable {
         external
         view
         returns (uint256 totalDailyMaxClaimableAmount);
+
+    /// @notice Set the reward duration. eg. To add + 180 days, newRewardDuration should be (old reward duration + 180 days)
+    /// @dev Set the reward duration in seconds
+    /// @param newRewardDuration The reward duration in seconds
+    function setRewardDuration(uint256 newRewardDuration) external;
+
+    /// @notice Get the loyalty reward percentage multiplier
+    function loyaltyBonusMultiplier() external view returns (uint256);
+
+    /// @notice Get the loyalty reward period
+    function loyaltyBonusPeriodUntilFull() external view returns (uint256);
+
+    /// @notice Set the loyalty reward percentage multiplier
+    /// @param newMultiplier The new loyalty reward percentage multiplier
+    /// @param newloyaltyBonusPeriodUntilFull The new loyalty reward percentage multiplier
+    function setLoyaltyBonus(uint256 newMultiplier, uint256 newloyaltyBonusPeriodUntilFull) external;
+
+    /// @notice Set the flow based reward base
+    /// @param newFactor The new flow based reward base
+    function setFlowBasedRewardBase(uint256 newFactor) external;
+
+    /// @notice Get the flow based reward base
+    function flowBasedRewardBase() external view returns (uint256);
+
 }

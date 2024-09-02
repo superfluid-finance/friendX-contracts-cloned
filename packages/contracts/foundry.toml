@@ -2,21 +2,13 @@
 src = "src"
 solc_version = "0.8.23"
 libs = ["lib"]
-
-remappings = [
-    'ds-test/=lib/forge-std/lib/ds-test/src/',
-    'erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/',
-    'forge-std/=lib/forge-std/src/',
-    'openzeppelin-contracts/=lib/openzeppelin-contracts/',
-    '@openzeppelin=lib/openzeppelin-contracts/',
-    'openzeppelin/=lib/openzeppelin-contracts/contracts/',
-    '@openzeppelin-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/',
-    'superfluid-contracts/=lib/protocol-monorepo/packages/ethereum-contracts/contracts/',
-    '@superfluid-finance/ethereum-contracts/=lib/protocol-monorepo/packages/ethereum-contracts',
-    '@superfluid-finance/hot-fuzz/=lib/protocol-monorepo/packages/hot-fuzz/',
-]
+test = "test"
 
 [fmt]
 bracket_spacing = true
+
+[profile.simulation]
+test = "fork-test"
+
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

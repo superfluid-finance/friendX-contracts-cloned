@@ -1,9 +1,5 @@
-ds-test/=lib/forge-std/lib/ds-test/src/
-erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/
-forge-std/=lib/forge-std/src/
-openzeppelin-contracts/=lib/openzeppelin-contracts/
-@openzeppelin=lib/openzeppelin-contracts/
-openzeppelin/=lib/openzeppelin-contracts/contracts/
-@openzeppelin-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/
-superfluid-contracts/=lib/protocol-monorepo/packages/ethereum-contracts/contracts/
-@superfluid-finance/solidity-semantic-money/=lib/protocol-monorepo/packages/solidity-semantic-money/
+@openzeppelin/contracts/=lib/openzeppelin-contracts-v4/contracts/
+@openzeppelin-v5/contracts/=lib/openzeppelin-contracts-v5/contracts/
+@superfluid-finance/ethereum-contracts/=lib/superfluid-protocol-monorepo/packages/ethereum-contracts/
+@superfluid-finance/solidity-semantic-money/=lib/superfluid-protocol-monorepo/packages/solidity-semantic-money/
+@superfluid-finance/hot-fuzz/=lib/superfluid-protocol-monorepo/packages/hot-fuzz/

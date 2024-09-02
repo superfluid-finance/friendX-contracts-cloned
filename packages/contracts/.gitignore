@@ -18,6 +18,9 @@ docs/
 html
 coverage
 
+# foundry litters
+/broadcast
+
 # echidna litters
 /corpus
 /packages

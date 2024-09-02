@@ -6,7 +6,9 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
 import "forge-std/console.sol";
 
 import { Script, console2 } from "forge-std/Script.sol";
-import { ISETH, ISuperfluid, ISuperfluidPool } from "superfluid-contracts/interfaces/superfluid/ISuperfluid.sol";
+import {
+    ISETH, ISuperfluid, ISuperfluidPool
+} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
 import { FanToken, IFanToken } from "../src/FanToken.sol";
 import { ChannelFactory } from "../src/ChannelFactory.sol";
 import { Channel } from "../src/Channel.sol";
@@ -15,7 +17,7 @@ import { Channel } from "../src/Channel.sol";
 contract InfoScript is Script {
     function setUp() public { }
 
-    function run() public {
+    function run() public view {
         uint128 protocolUnits = ISuperfluidPool(0x0D8FCF34C1DFA8C25db95818B5e539A956a9dEda).getUnits(
             0xF72c73981550D5120537e8613e3A9BE4B6F5482E
         );

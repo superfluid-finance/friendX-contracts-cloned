@@ -10,15 +10,20 @@ import {
     ISuperApp,
     ISuperfluid,
     ISuperfluidPool,
-    ISuperToken
-} from "superfluid-contracts/interfaces/superfluid/ISuperfluid.sol";
-import { SuperfluidGovernanceBase } from "superfluid-contracts/gov/SuperfluidGovernanceBase.sol";
-import { PoolConfig } from "superfluid-contracts/interfaces/agreements/gdav1/IGeneralDistributionAgreementV1.sol";
-import { SuperTokenV1Library } from "superfluid-contracts/apps/SuperTokenV1Library.sol";
+    ISuperToken,
+    PoolConfig
+} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
+import {
+    SuperfluidGovernanceBase
+} from "@superfluid-finance/ethereum-contracts/contracts/gov/SuperfluidGovernanceBase.sol";
+import {
+    SuperTokenV1Library
+} from "@superfluid-finance/ethereum-contracts/contracts/apps/SuperTokenV1Library.sol";
 
 import { ChannelBase } from "./interfaces/ChannelBase.sol";
 import { IFanToken } from "./interfaces/IFanToken.sol";
-import { AccountingHelperLibrary } from "./libs/AccountingHelperLibrary.sol";
+import { AccountingHelperLibrary, ONE_HUNDRED_PERCENT } from "./libs/AccountingHelperLibrary.sol";
+
 
 using SafeCast for uint256;
 using SuperTokenV1Library for ISuperToken;
@@ -28,15 +33,21 @@ using SuperTokenV1Library for ISuperToken;
 /// @notice This contract represents a channel that can be subscribed to by fans
 /// @dev This contract is a SuperApp that reacts to CFAv1 flows
 contract Channel is ChannelBase {
-    //// MODIFIERS ////
-    modifier onlyFans() {
-        if (msg.sender != address(FAN)) revert ONLY_FAN_CAN_BE_CALLER();
-        _;
-    }
+
+    bytes32 internal constant _CFAV1_TYPE = keccak256("org.superfluid-finance.agreements.ConstantFlowAgreement.v1");
+
+    /// @dev This limits the amount of distributeLeakedRewards after the leakage had be fixed.
+    uint256 internal constant _MINIMUM_INSTANT_DISTRIBUTION_AMOUNT = 1e18;
 
     //// FUNCTIONS ////
-    constructor(ISuperfluid host, address protocolFeeDest, ISuperToken ethX, IFanToken _fan)
-        ChannelBase(host, protocolFeeDest, ethX, _fan)
+    constructor(ISuperfluid host,
+                ISuperToken ethX, IFanToken fan,
+                address protocolFeeDest, uint256 protocolFeeAmount,
+                int96 minSubscriptionFlowRate, int96 maxSubscriptionFlowRate)
+        ChannelBase(host,
+                    ethX, fan,
+                    protocolFeeDest, protocolFeeAmount,
+                    minSubscriptionFlowRate, maxSubscriptionFlowRate)
     {
         _disableInitializers();
     }
@@ -49,6 +60,10 @@ contract Channel is ChannelBase {
     {
         // set the owner of the contract
         owner = _owner;
+
+        // NOTE: we use these flow rates "190258751902587", "380517503805175", "570776255707762", otherwise.
+        require(_flowRate >= MINIMUM_SUBSCRIPTION_FLOW_RATE &&
+                _flowRate <= MAXIMUM_SUBSCRIPTION_FLOW_RATE, "Invalid subscription flow rate");
 
         // set the subscription flow rate
         subscriptionFlowRate = _flowRate;
@@ -67,94 +82,118 @@ contract Channel is ChannelBase {
         // grant the channel owner a single unit so they receive 100% of the income
         // prior to any stakers
         channelPool.updateMemberUnits(_owner, 1);
+        stakerRegimeRevisions[_owner] = LATEST_REGIME_REVISION;
 
         // set the creator fee percentage
         creatorFeePercentage = creatorFeePct;
+
+        // make sure the new channels is always of the latest regime
+        currentRegimeRevision = LATEST_REGIME_REVISION;
+
+        // make sure protocol fee destination has also the latest regime revision
+        stakerRegimeRevisions[PROTOCOL_FEE_DESTINATION] = LATEST_REGIME_REVISION;
     }
 
     /// @inheritdoc ChannelBase
-    function handleStake(address subscriber, uint256 stakeDelta) external override onlyFans {
-        // @note if there are no units in the channel pool, we send first transfer the accumulated streamed
-        // tokens to the channel owner
-        if (channelPool.getTotalUnits() == 0) {
-            SUBSCRIPTION_SUPER_TOKEN.transfer(owner, SUBSCRIPTION_SUPER_TOKEN.balanceOf(address(this)));
-        }
+    function handleStake(address staker, uint256 stakeDelta) external override onlyFans {
+        distributeLeakedRewards();
+        _upgradeStakerIfNeeded(staker);
 
-        // Get the amount of units that will be allocated to the protocol fee destination, creator and subscriber
+        // Get the amount of units that will be allocated to the protocol fee destination, creator and staker
         // based on the stakeDelta
-        (uint128 protocolFeeUnitsDelta, uint128 creatorUnitsDelta, uint128 subscriberUnitsDelta) =
-        AccountingHelperLibrary.getPoolUnitDeltaAmounts(
-            stakeDelta, ONE_HUNDRED_PERCENT, PROTOCOL_FEE_AMOUNT, creatorFeePercentage
-        );
+        (uint128 protocolFeeUnitsDelta, uint128 creatorUnitsDelta, uint128 stakerUnitsDelta) =
+            AccountingHelperLibrary.getPoolUnitDeltaAmounts(_channelPoolScalingFactor(staker),
+                                                            stakeDelta, PROTOCOL_FEE_AMOUNT, creatorFeePercentage);
 
-        uint256 cashbackPercentage = getSubscriberCashbackPercentage();
+        uint256 cashbackPercentage = getStakersCashbackPercentage();
 
-        if (subscriberUnitsDelta == 0 && cashbackPercentage > 0) revert NO_UNITS_FOR_SUBSCRIBER();
+        if (stakerUnitsDelta == 0 && cashbackPercentage > 0) revert NO_UNITS_FOR_SUBSCRIBER();
 
-        (uint128 currentProtocolPoolUnits, uint128 currentCreatorPoolUnits, uint128 currentSubscriberUnits) =
-            _getCurrentPoolUnits(subscriber);
+        (uint128 currentProtocolPoolUnits, uint128 currentCreatorPoolUnits, uint128 currentStakerUnits) =
+            _getCurrentPoolUnits(staker);
 
         // rebalance the protocol fee units and the creator units so that they are in the correct proportions
         channelPool.updateMemberUnits(PROTOCOL_FEE_DESTINATION, currentProtocolPoolUnits + protocolFeeUnitsDelta);
 
         // handle the case where the owner is subscribing to their own channel
-        if (subscriber == owner) {
-            // give the owner-subscriber the creator units and the subscriber units
-            channelPool.updateMemberUnits(
-                subscriber, currentCreatorPoolUnits + creatorUnitsDelta + subscriberUnitsDelta
-            );
+        if (staker == owner) {
+            // give the owner-staker the creator units and the staker units
+            channelPool.updateMemberUnits(staker, currentCreatorPoolUnits + creatorUnitsDelta + stakerUnitsDelta);
         } else {
-            // the subscriber is not the owner, so we need to update their units separately
+            // the staker is not the owner, so we need to update their units separately
             channelPool.updateMemberUnits(owner, currentCreatorPoolUnits + creatorUnitsDelta);
-            // if the cashback percentage is 0, there is nothing to update for the subscriber
+            // if the cashback percentage is 0, there is nothing to update for the staker
             if (cashbackPercentage > 0) {
-                channelPool.updateMemberUnits(subscriber, currentSubscriberUnits + subscriberUnitsDelta);
+                channelPool.updateMemberUnits(staker, currentStakerUnits + stakerUnitsDelta);
             }
-        }
-
-        // start/update GDA flow distribution to the protocol, owner and subscribers
-        // we only start the flow if the total inflow rate is greater than 0
-        // @note this will revert if the contract does not have enough tokens for buffer
-        // to start the flow
-        if (totalInflowRate > 0) {
-            SUBSCRIPTION_SUPER_TOKEN.distributeFlow(address(this), channelPool, totalInflowRate);
         }
     }
 
     /// @inheritdoc ChannelBase
-    function handleUnstake(address subscriber, uint256 unstakeDelta) external override onlyFans {
-        (uint128 currentProtocolPoolUnits, uint128 currentCreatorPoolUnits, uint128 currentSubscriberUnits) =
-            _getCurrentPoolUnits(subscriber);
+    function handleUnstake(address staker, uint256 unstakeDelta) external override onlyFans {
+        distributeLeakedRewards();
+        _upgradeStakerIfNeeded(staker);
 
-        uint256 cashbackPercentage = getSubscriberCashbackPercentage();
+        (uint128 currentProtocolPoolUnits, uint128 currentCreatorPoolUnits, uint128 currentStakerUnits) =
+            _getCurrentPoolUnits(staker);
 
-        // if the subscriber has no units, they have deleted their flow, so unstaking should not impact
+        uint256 cashbackPercentage = getStakersCashbackPercentage();
+
+        // if the staker has no units, they have deleted their flow, so unstaking should not impact
         // the unit amounts for the different accounts as this has been handled in the onFlowDeleted callback
-        if (currentSubscriberUnits == 0 && cashbackPercentage > 0) return;
+        if (currentStakerUnits == 0 && cashbackPercentage > 0) return;
 
-        // Get the amount of units that will be unallocated from the protocol fee destination, creator and subscriber
+        // Get the amount of units that will be unallocated from the protocol fee destination, creator and staker
         // based on the unstakeDelta
-        (uint128 protocolFeeUnitsDelta, uint128 creatorUnitsDelta, uint128 subscriberUnitsDelta) =
-        AccountingHelperLibrary.getPoolUnitDeltaAmounts(
-            unstakeDelta, ONE_HUNDRED_PERCENT, PROTOCOL_FEE_AMOUNT, creatorFeePercentage
-        );
+        (uint128 protocolFeeUnitsDelta, uint128 creatorUnitsDelta, uint128 stakerUnitsDelta) =
+            AccountingHelperLibrary.getPoolUnitDeltaAmounts(_channelPoolScalingFactor(staker),
+                                                            unstakeDelta, PROTOCOL_FEE_AMOUNT, creatorFeePercentage);
 
         // rebalance the protocol fee units and the creator units so that they are in the correct proportions
-        channelPool.updateMemberUnits(PROTOCOL_FEE_DESTINATION, currentProtocolPoolUnits - protocolFeeUnitsDelta);
+        channelPool.updateMemberUnits(PROTOCOL_FEE_DESTINATION,
+                                      _safeSub(currentProtocolPoolUnits, protocolFeeUnitsDelta));
 
         // handle the case where the owner is unsubscribing from their own channel
-        if (subscriber == owner) {
-            // remove the creator units and subscriber units from the owner-subscriber
-            channelPool.updateMemberUnits(
-                subscriber, currentCreatorPoolUnits - creatorUnitsDelta - subscriberUnitsDelta
-            );
+        if (staker == owner) {
+            // remove the creator units and staker units from the owner-staker
+            channelPool.updateMemberUnits(staker,
+                                          _safeSub(currentCreatorPoolUnits, creatorUnitsDelta + stakerUnitsDelta));
         } else {
-            // the subscriber is not the owner, so we need to update their units separately
-            channelPool.updateMemberUnits(owner, currentCreatorPoolUnits - creatorUnitsDelta);
-            // if the cashback percentage is 0, there is nothing to update for the subscriber
+            // the staker is not the owner, so we need to update their units separately
+            channelPool.updateMemberUnits(owner, _safeSub(currentCreatorPoolUnits, creatorUnitsDelta));
+            // if the cashback percentage is 0, there is nothing to update for the staker
             if (cashbackPercentage > 0) {
-                channelPool.updateMemberUnits(subscriber, currentSubscriberUnits - subscriberUnitsDelta);
+                channelPool.updateMemberUnits(staker, _safeSub(currentStakerUnits, stakerUnitsDelta));
             }
+        }
+    }
+
+    /// @dev !WARNING! This is an open-to-all action intended to fix the early-day leaked channel inflow issue.
+    ///      It is safe to be called by everyone, because it distribute to CO, Stakers with the same proportion.
+    function distributeLeakedRewards() public {
+        distributeLeakedRewards(_MINIMUM_INSTANT_DISTRIBUTION_AMOUNT);
+    }
+
+    /// @dev This allows forcing minimumAmount to 0 during scripted cleanups.
+    function distributeLeakedRewards(uint256 minimumAmount) public {
+        (, int96 _actualFeeDistFlowRate,) = SUBSCRIPTION_SUPER_TOKEN.getGDAFlowInfo(address(this), channelPool);
+        if (totalInflowRate > _actualFeeDistFlowRate) {
+            uint256 reservedForExtraBuffer = SUBSCRIPTION_SUPER_TOKEN.getBufferAmountByFlowRate(totalInflowRate)
+                - SUBSCRIPTION_SUPER_TOKEN.getBufferAmountByFlowRate(_actualFeeDistFlowRate);
+            uint256 balance = SUBSCRIPTION_SUPER_TOKEN.balanceOf(address(this));
+            if (balance > reservedForExtraBuffer) {
+                uint256 toBeDistributed = balance - reservedForExtraBuffer;
+                if (toBeDistributed > minimumAmount) {
+                    SUBSCRIPTION_SUPER_TOKEN.distributeToPool(address(this), channelPool, toBeDistributed);
+                }
+            }
+        } // else this should not happen
+    }
+
+    // @dev !WARNING! Similar to distributeLeakedRewards, this is an open-to-all action, too.
+    function distributeTotalInFlows() public {
+        if (totalInflowRate >= 0) {
+            SUBSCRIPTION_SUPER_TOKEN.distributeFlow(address(this), channelPool, totalInflowRate);
         }
     }
 
@@ -221,10 +260,7 @@ contract Channel is ChannelBase {
         // sum the inflow rate from the new subscriber to the globally tracked subscription inflow rate on the FAN token
         FAN.handleSubscribe(sender, flowRate);
 
-        // when someone subscribes we immediately update the flow distribution
-        int96 flowDistributionFlowRate =
-            SUBSCRIPTION_SUPER_TOKEN.getFlowDistributionFlowRate(address(this), channelPool);
-        if (flowDistributionFlowRate > 0) {
+        if (totalInflowRate >= 0) {
             newCtx = SUBSCRIPTION_SUPER_TOKEN.distributeFlowWithCtx(address(this), channelPool, totalInflowRate, newCtx);
         }
 
@@ -269,10 +305,7 @@ contract Channel is ChannelBase {
         // sum the flow rate delta after the subscription stream amount is updated
         FAN.handleSubscribe(sender, flowRateDelta);
 
-        // when someone updates the amount of flow, we immediately update the flow distribution
-        int96 flowDistributionFlowRate =
-            SUBSCRIPTION_SUPER_TOKEN.getFlowDistributionFlowRate(address(this), channelPool);
-        if (flowDistributionFlowRate >= 0) {
+        if (totalInflowRate >= 0) {
             newCtx = SUBSCRIPTION_SUPER_TOKEN.distributeFlowWithCtx(address(this), channelPool, totalInflowRate, newCtx);
         }
 
@@ -312,8 +345,6 @@ contract Channel is ChannelBase {
         // subtract the previous flow rate from the globally tracked subscription inflow rate on the FAN token
         FAN.updateTotalSubscriptionFlowRate(-previousFlowRate);
 
-        // we update the GDA flow distribution to the protocol, owner and subscribers
-        // only if an existing flow exists
         if (totalInflowRate >= 0) {
             newCtx = SUBSCRIPTION_SUPER_TOKEN.distributeFlowWithCtx(address(this), channelPool, totalInflowRate, newCtx);
         }
@@ -366,18 +397,24 @@ contract Channel is ChannelBase {
         (lastUpdated, flowRate,,) = SUBSCRIPTION_SUPER_TOKEN.getFlowInfo(subscriber, address(this));
     }
 
-    function getSubscriberCashbackPercentage() public view override returns (uint256) {
+    function getStakersCashbackPercentage() public view override returns (uint256) {
         return ONE_HUNDRED_PERCENT - creatorFeePercentage - PROTOCOL_FEE_AMOUNT;
     }
 
-    function _getCurrentPoolUnits(address subscriber)
+    // This is used where rounding-errors-resulted error could cause underflow issue
+    function _safeSub(uint128 a, uint128 b) internal pure returns (uint128 c) {
+        if (a > b) return a - b;
+        else return 0;
+    }
+
+    function _getCurrentPoolUnits(address staker)
         internal
         view
-        returns (uint128 currentProtocolPoolUnits, uint128 currentCreatorPoolUnits, uint128 currentSubscriberUnits)
+        returns (uint128 currentProtocolPoolUnits, uint128 currentCreatorPoolUnits, uint128 currentStakerUnits)
     {
         currentProtocolPoolUnits = channelPool.getUnits(PROTOCOL_FEE_DESTINATION);
         currentCreatorPoolUnits = channelPool.getUnits(owner);
-        currentSubscriberUnits = channelPool.getUnits(subscriber);
+        currentStakerUnits = channelPool.getUnits(staker);
     }
 
     function _isHost() internal view returns (bool) {
@@ -385,10 +422,66 @@ contract Channel is ChannelBase {
     }
 
     function _isAcceptedAgreement(address agreementClass) internal view returns (bool) {
-        return agreementClass == address(HOST.getAgreementClass(CFAV1_TYPE));
+        return agreementClass == address(HOST.getAgreementClass(_CFAV1_TYPE));
     }
 
     function _isAcceptedSuperToken(ISuperToken superToken) internal view returns (bool) {
         return address(superToken) == address(SUBSCRIPTION_SUPER_TOKEN);
     }
+
+    function _channelPoolScalingFactor(address staker) internal view returns (uint256) {
+        uint256 revision = stakerRegimeRevisions[staker];
+        if (revision == 0) return CHANNEL_POOL_SCALING_FACTOR_R0;
+        else if (revision == 1) return CHANNEL_POOL_SCALING_FACTOR_R1;
+        else assert(false);
+    }
+
+    function _upgradeStakerIfNeeded(address staker) internal {
+        // check if the migration has started
+        if (currentRegimeRevision == LATEST_REGIME_REVISION) {
+            // staker needs to be migrated
+            if (stakerRegimeRevisions[staker] == LATEST_REGIME_REVISION - 1) {
+                uint128 stakerUnit = channelPool.getUnits(staker);
+                // Note: leave the one unit allow, that is the special default channel owner total units.
+                if (stakerUnit > 1) {
+                    uint128 newStakerUnit = (uint256(stakerUnit) * CHANNEL_POOL_SCALING_FACTOR_R0
+                                             / CHANNEL_POOL_SCALING_FACTOR_R1).toUint128();
+                    channelPool.updateMemberUnits(staker, newStakerUnit);
+                }
+            }
+            // allways make sure we set the staker to the latest regime
+            stakerRegimeRevisions[staker] = LATEST_REGIME_REVISION;
+        }
+    }
+
+    //// Government Interventions: "We are here to help!" ////
+
+    function govMarkRegimeUpgradeStarted() external onlyGov {
+        require(currentRegimeRevision == LATEST_REGIME_REVISION - 1, "channel already of latest regime");
+        currentRegimeRevision = LATEST_REGIME_REVISION;
+        // the owner and platform fee destination must be migrated right away, otherwise all hell can break loose
+        _upgradeStakerIfNeeded(owner);
+        _upgradeStakerIfNeeded(PROTOCOL_FEE_DESTINATION);
+    }
+
+    function govUpgradeStakers(address[] memory stakers) external onlyGov {
+        for (uint256 i = 0; i < stakers.length; i++) {
+            _upgradeStakerIfNeeded(stakers[i]);
+        }
+    }
+
+    //// MODIFIERS ////
+    modifier onlyFans() {
+        if (msg.sender != address(FAN)) revert ONLY_FAN_CAN_BE_CALLER();
+        _;
+    }
+
+    modifier onlyGov() {
+        if (msg.sender != FAN.owner()) revert ONLY_GOV_ALLOWED();
+        _;
+    }
+
+    /// @dev !!WARNING!! A production version of the FanToken requires this interface, do not delete without verifying
+    //        with a fork testing.
+    function ONE_HUNDRED_PERCENT() external pure returns (uint256) { return ONE_HUNDRED_PERCENT; }
 }
